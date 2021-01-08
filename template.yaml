@@ -1,0 +1,93 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: 
+  SAM built CFN for AWS-Service-IP-Space-to-SG-to-ENIs function deployment along with necessary 
+  permissions, SNS trigger from the AmazonIpSpaceChanged topic, and SNS dead-letter-queue with 
+  a subscription to an email address for receiving notifications on lambda failures.
+  
+  Lambda creates Security Groups for AWS Service IPs and attaches to pre-tagged ENIs
+
+Parameters:
+  Service:
+    Type: String
+    Default: "CLOUDFRONT"
+  IngressPorts:
+    Type: String
+    Default: "8080-8081"
+    Description: "Comma separated list of ports or port-ranges (e.g. 80, 8080-8081, 443)"
+  PrefixName:
+    Type: String
+    Default: "AUTOUPDATE"
+    Description: "Value to set PREFIX_NAME tag with when creating new Security Groups.  ENIs that are manually tagged the same will have those Security Groups attached."
+  RegionList:
+    Type: String
+    Default: "eu-west-1"
+    Description: "Comma separated list of regions in which to add Security Groups."
+  SNSTopicARN:
+    Type: String
+    Default: "arn:aws:sns:us-east-1:806199016981:AmazonIpSpaceChanged"
+    Description: "AWS AmazonIpSpaceChanged SNS Topic ARN"
+  NotificationEmail:
+    Type: String
+    Description: "Address to send function failure notification emails"
+
+Globals:
+  Function:
+    Timeout: 60
+
+Resources:
+  LambdaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: "A Lambda function to create EC2 Security Groups (SGs) in multiple regions with ingress rules for IP address ranges of an AWS service and attach them to pre-tagged ENIs."
+      CodeUri: AWS-IPs-to-SGs-to-ENIs/
+      Handler: app.lambda_handler
+      DeadLetterQueue:
+        Type: SNS
+        TargetArn: !Ref FailureAlertTopic
+      PackageType: Zip
+      Policies:
+        Statement:
+          - Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: "arn:aws:logs:*:*:*"
+          - Effect: Allow
+            Action:
+              - ec2:DescribeVpcs
+              - ec2:DescribeSecurityGroups
+              - ec2:CreateSecurityGroup
+              - ec2:DeleteSecurityGroup
+              - ec2:AuthorizeSecurityGroupIngress
+              - ec2:CreateTags
+              - ec2:DescribeNetworkInterfaces
+              - ec2:ModifyNetworkInterfaceAttribute
+            Resource: "*"
+          - Effect: Allow
+            Action:
+              - servicequotas:GetServiceQuota
+            Resource:
+              - arn:aws:servicequotas:*:*:vpc/L-0EA8095F
+              - arn:aws:servicequotas:*:*:vpc/L-2AFB9258
+      Runtime: python3.8
+      Events:
+        AmazonIpSpaceChanged:
+          Type: SNS
+          Properties:
+            Topic: !Ref SNSTopicARN
+            Region: us-east-1
+      Environment:
+        Variables:
+          SERVICE: !Ref Service
+          PORTS: !Ref IngressPorts
+          PREFIX_NAME: !Ref PrefixName
+          REGIONS: !Ref RegionList
+          DEBUG: "true"
+  FailureAlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      Subscription:
+      - Protocol: email
+        Endpoint: !Ref NotificationEmail
