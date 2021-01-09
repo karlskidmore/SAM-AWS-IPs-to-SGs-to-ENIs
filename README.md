@@ -1,4 +1,4 @@
-# AWS Service IP Space to SGs to ENIs
+# AWS Service IP Space → SGs → ENIs
 A Lambda function to create EC2 Security Groups (SGs) in multiple regions with ingress rules for IP address ranges of an AWS service and attach them to pre-tagged ENIs.  Typical use-case being to restrict access to an EC2 instance or load balancer to just CloudFront (the motivation behind this project).  SGs are replaced wholesale whenever this function is invoked, when run manually or when triggered by AWS updating IP address spaces.
 
 ## SAM
