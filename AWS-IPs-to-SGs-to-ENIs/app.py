@@ -32,23 +32,23 @@ def lambda_handler(event, context):
 
     # Verify expected and calculated hashes match
     expected_hash = message['md5']
-    received_hash = hashlib.md5(ip_json).hexdigest()
-    if received_hash != expected_hash:
-        raise Exception(f'MD5 Mismatch: got {received_hash} expected {expected_hash}')
+    calculated_hash = hashlib.md5(ip_json).hexdigest()
+    if calculated_hash != expected_hash:
+        raise Exception(f'MD5 Mismatch: got {calculated_hash} expected {expected_hash}')
 
     # Import IP ranges from json payload, then SERVICE's subset of IPs within that
     ip_ranges = json.loads (ip_json)
-    cf_ranges = [prefix['ip_prefix'] for prefix in ip_ranges['prefixes'] if prefix['service'] == SERVICE]
+    svc_ranges = [prefix['ip_prefix'] for prefix in ip_ranges['prefixes'] if prefix['service'] == SERVICE]
     
     # Derive total number of rules required (i.e. ranges * ports)
-    ranges = len(cf_ranges)
+    ranges = len(svc_ranges)
     ports = len(INGRESS_PORTS)
     total_rules = ranges * ports
 
     # Construct array of rules for each port/port-range and each CIDR range
     rules = []
     for port_range in INGRESS_PORTS:
-        for cidr in cf_ranges:
+        for cidr in svc_ranges:
             rules.append({
                 'FromPort': int(port_range.split('-',1)[0]),
                 'ToPort': int(port_range.split('-',1)[-1]),
@@ -56,8 +56,9 @@ def lambda_handler(event, context):
                 'IpProtocol': 'tcp'
                 })
 
-    # Grab timestamp to embed in SG naming
-    ts = int(time.time())
+    # Create SG label from IP range publish time + processing delay
+    elapsed = int(time.time()) - int(ip_ranges['syncToken'])
+    sg_label = f"{ip_ranges['createDate']}+{elapsed}"
 
     # Process SG renewals for each region specified
     for region in REGIONS:
@@ -91,7 +92,7 @@ def lambda_handler(event, context):
         # Create SGs sufficient for CIDRs and port-ranges and tag them
         new_sgs = []
         for i in range(total_sgs_rqd):
-            SG_NAME = f'{NAME}-{ts}-{i+1}-of-{total_sgs_rqd}'
+            SG_NAME = f'{NAME} {i+1}-of-{total_sgs_rqd} @{sg_label}s'
             new_sg = ec2_client.create_security_group(Description=SG_NAME, GroupName=SG_NAME, VpcId=vpc_id, DryRun=False)
             new_sgs.append(new_sg['GroupId'])
         ec2_client.create_tags(Resources=new_sgs, Tags=[{'Key':'PREFIX_NAME', 'Value':NAME}])
