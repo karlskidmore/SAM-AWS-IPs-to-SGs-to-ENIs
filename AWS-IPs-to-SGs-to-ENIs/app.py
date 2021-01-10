@@ -39,7 +39,7 @@ def lambda_handler(event, context):
     # Import IP ranges from json payload, then SERVICE's subset of IPs within that
     ip_ranges = json.loads (ip_json)
     svc_ranges = [prefix['ip_prefix'] for prefix in ip_ranges['prefixes'] if prefix['service'] == SERVICE]
-    
+
     # Derive total number of rules required (i.e. ranges * ports)
     ranges = len(svc_ranges)
     ports = len(INGRESS_PORTS)
@@ -56,7 +56,7 @@ def lambda_handler(event, context):
                 'IpProtocol': 'tcp'
                 })
 
-    # Create SG label from IP range publish time + processing delay
+    # SG label = IP range publish time + elpased seconds since then
     elapsed = int(time.time()) - int(ip_ranges['syncToken'])
     sg_label = f"{ip_ranges['createDate']}+{elapsed}"
 
@@ -81,18 +81,30 @@ def lambda_handler(event, context):
         vpc_id = ec2_client.describe_vpcs(Filters=[{'Name':'isDefault','Values': ['true']},])['Vpcs'][0]['VpcId']
 
         # Set filter to search for tagged SGs and ENIs
-        filters = [ { 'Name': 'tag-key', 'Values': ['PREFIX_NAME'] },
+        filters = [ { 'Name': 'tag-key',   'Values': ['PREFIX_NAME'] },
                     { 'Name': 'tag-value', 'Values': [NAME] },
-                    { 'Name': 'vpc-id', 'Values': [vpc_id] } ]
+                    { 'Name': 'vpc-id',    'Values': [vpc_id] } ]
 
         # Get list of old SGs to delete, based on tag filter
-        sgs_response = ec2_client.describe_security_groups(Filters=filters)
-        old_sgs = [sg['GroupId'] for sg in sgs_response['SecurityGroups']]
+        sgs = ec2_client.describe_security_groups(Filters=filters)['SecurityGroups']
+        old_sg_ids = [sg['GroupId'] for sg in sgs]
+
+        # Get list of tagged ENIs
+        enis = ec2_client.describe_network_interfaces(Filters=filters)['NetworkInterfaces']
+        eni_ids = [eni['NetworkInterfaceId'] for eni in enis]
+
+        # Anything really changed? Take a hash of things that can change and compare with previous hash...
+        metadata_source = ''.join(sorted(INGRESS_PORTS + [str(total_sgs_rqd)] + eni_ids + svc_ranges)).encode()
+        metadata_hash_now = hashlib.md5(metadata_source).hexdigest()[:5]
+        metadata_hash_before = sgs[0]['GroupName'].split(' ')[1] if len(sgs) else None
+        if metadata_hash_now == metadata_hash_before:
+            logging.info(f"Skipping replacing SGs as there's no change in: {SERVICE} IP ranges, Ports, SGs required, and tagged ENIs.")
+            continue
 
         # Create SGs sufficient for CIDRs and port-ranges and tag them
         new_sgs = []
         for i in range(total_sgs_rqd):
-            SG_NAME = f'{NAME} {i+1}-of-{total_sgs_rqd} @{sg_label}s'
+            SG_NAME = f'{NAME} {metadata_hash_now} {i+1}-of-{total_sgs_rqd} @{sg_label}s'
             new_sg = ec2_client.create_security_group(Description=SG_NAME, GroupName=SG_NAME, VpcId=vpc_id, DryRun=False)
             new_sgs.append(new_sg['GroupId'])
         ec2_client.create_tags(Resources=new_sgs, Tags=[{'Key':'PREFIX_NAME', 'Value':NAME}])
@@ -105,14 +117,15 @@ def lambda_handler(event, context):
             logging.info(f'Added {len(chunk)} ingress rules to SG {sg}')
 
         # Update ENIs replacing old with new SGs, persisting any 'other' attached SGs
-        eni_response = ec2_client.describe_network_interfaces(Filters=filters)
-        for eni in eni_response['NetworkInterfaces']:
-            other_sgs = [sg['GroupId'] for sg in eni['Groups'] if sg['GroupName'].find(NAME) != 0]
+        for eni in enis:
+            # Get associated SGs where GroupName doesn't start with our tag name
+            other_sgs = [eni_sg['GroupId'] for eni_sg in eni['Groups'] if eni_sg['GroupName'].find(NAME) != 0]
 
             # Bomb if too many SGs
             if total_sgs_rqd + len(other_sgs) > max_sgs_per_eni:
                 raise Exception(f"Total SGs required:{total_sgs_rqd} + existing SGs:{len(other_sgs)} is greater than the allowed maximum SGs per ENI:{max_sgs_per_eni}")
 
+            # Atomic swap of old for new SGs
             ec2_client.modify_network_interface_attribute(
                 Groups = new_sgs + other_sgs,
                 NetworkInterfaceId = eni['NetworkInterfaceId'] )
@@ -120,6 +133,6 @@ def lambda_handler(event, context):
             logging.info(f"Attached new SGs to ENI ({eni['NetworkInterfaceId']}) and kept existing SGs {*other_sgs,}")
 
         # Finally, delete old SGs
-        for sg in old_sgs:
+        for sg in old_sg_ids:
             ec2_client.delete_security_group(GroupId=sg)
             logging.info(f'Deleted redundant SG {sg}')

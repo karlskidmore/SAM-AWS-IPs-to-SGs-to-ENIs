@@ -1,7 +1,7 @@
 # AWS Service IP Space → SGs → ENIs
-A Lambda function to create EC2 Security Groups (SGs) in multiple regions with ingress rules for IP address ranges of an AWS service and attach them to pre-tagged ENIs.  Typical use-case being to restrict access to an EC2 instance or load balancer to just CloudFront (the motivation behind this project).  SGs are replaced wholesale whenever this function is invoked, when run manually or when triggered by AWS updating IP address spaces.
+A Lambda function to create EC2 Security Groups (SGs) in multiple regions with ingress rules for IP address ranges of an AWS service and attach them to ENIs tagged with `PREFIX_NAME=AUTOUPDATE`.  Typical use-case being to allow access to an EC2 instance or Load Balancer from CloudFront only.  The SGs are replaced whenever the function is invoked, i.e., when triggered by AWS updating IP addresses spaces or when manually invoked (see **Test Event** below).  See **This Solution** below for more details.
 
-## SAM
+## Deployment
 
 This project uses [AWS SAM](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/what-is-sam.html) to deploy the function along with necessary permissions, SNS trigger from the AmazonIpSpaceChanged topic, and SNS dead-letter-queue with a subscription to an email address for receiving notifications on lambda failures.
 
@@ -43,11 +43,9 @@ A dropped SNS message from the AmazonIpSpaceChanged topic would not be caught ob
 
 ## Test Event
 
-In the events directory of this repo is an `events.json` file containing an example notification from the AmazonIpSpaceChanged topic.  This can be use to test the function manually in the AWS Lambda console or in a development environment (e.g. sam local).  It can also be used whenever there is a need to re-run the function outside of being invoked by notifications from the AmazonIpSpaceChanged topic, such as when the list of regions or ports needs to be changed and actioned before AWS' next update.
+In the events directory of this repo is an `events.json` file containing an example notification from the AmazonIpSpaceChanged topic.  This can be use to test the function manually in the AWS Lambda console or in a development environment (e.g. sam local).  It can also be used whenever there is a need to re-run the function outside of being invoked by notifications from the AmazonIpSpaceChanged topic, such as when the list of regions or ports needs to be changed, or when there are newly tagged ENIs to associate SGs to.
 
 When the test is executed it will typically report an `MD5 Mismatch` error (in the logs) -- this is expected as whenever AWS IP address spaces change this hash will also change.  Simply update the event configuration in the AWS Lambda console with the new hash reported in the error log and retry the test.
-
----
 
 # Background
 
@@ -78,22 +76,25 @@ In summary, while these approaches worked well within fixed scenarios, they have
 
 ## This Solution
 
-This solution borrows ideas from the above methods to an extent but simplifies by borrowing ideas from throw-away immutable container deployment practices: i.e. it does not attempt to mutate a fixed set of SGs in-place, instead it creates new SGs according to the latest information available *at invocation time*, (i.e. How many IP ranges, *right-now*?  How many ports, *right-now*?  What are the region-specific limits, *right-now*?).   Like containers, old SGs are destroyed as soon as the new SGs take their place on ENIs.  Any separate SGs for perpetual rules (for SSH, VPNs, etc) already attached to ENIs survive these SG replacements -- in one atomic operation.
+This solution borrows ideas from the above methods to an extent but simplifies by borrowing ideas from throw-away immutable container deployment practices: i.e. it does not attempt to mutate a fixed set of SGs in-place, instead it creates new SGs according to the latest information available *at invocation time*, (i.e. How many *Service* IP ranges, *right-now*?  How many ports, *right-now*?  What are the region-specific limits, *right-now*?).   Like containers, old SGs are destroyed as soon as the new SGs take their place on ENIs.  Any separate SGs for perpetual rules (for SSH, VPNs, etc) already attached to ENIs survive these SG replacements -- in one atomic operation.
 
 The high level steps are:
 
 1. Retrieves latest IP ranges from AWS' endpoint
 2. Creates one big list of ingress rules (for all IP ranges and ports/port-ranges)
 3. Determine SG limits for the region (rules per SG, and SGs per ENI)
-4. Creates sufficient SGs to hold all the rules (maybe different in each region)
-5. Split ingress rules across created SGs
-6. Switch old for new SGs on each tagged ENI
-7. Destroy old SGs
+4. Test if anything has actually changed otherwise end here**
+5. Creates sufficient SGs to hold all the rules (maybe different in each region)
+6. Split ingress rules across created SGs
+7. Switch old for new SGs on each tagged ENI
+8. Destroy old SGs
+
+** Note that IP ranges returned from https://ip-ranges.amazonaws.com/ip-ranges.json reach into the thousands as they cover many AWS services.  On aggregate they change frequently (well, about once or twice a day on most weeks).  The subset of IP addresses for a particular service may change much less frequently though.  For instance, the CloudFront subset of IP addresses represents just 3% of the total IP ranges advertised, so they may change very rarely indeed.  This solution only replaces SGs (steps 5 to 8) when that subset itself changes, or when the number of SGs required changes (i.e., due to updated limits), or the ports/port-range rules change, or the tagged ENIs have changed (to automatically include newly tagged ENIs).
 
 ## Limitations
 
 Only supports regions' default VPC, but extending to named VPCs could be easily implemented.
 
-## IPv6
+## CloudFront and IPv6
 
 While there are both IPv4 addresses and IPv6 addresses included in the response for CloudFront, this function only extracts and uses the IPv4 addresses because [CloudFront communicates to origins using IPv4 only](https://cloudonaut.io/getting-started-with-ipv6-on-aws/).  If this ever changes (and assuming the origin is also dual-stack) then modifying the function to support IPv6 should be trivial.  Incidentally, CloudFront *client-side* support of IPv6 is irrelevant to this concern.
