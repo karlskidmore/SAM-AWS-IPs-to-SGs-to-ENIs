@@ -1,5 +1,5 @@
 # AWS Service IP Space → SGs → ENIs
-A Lambda function to create EC2 Security Groups (SGs) in multiple regions with ingress rules for IP address ranges of an AWS service and attach them to ENIs tagged with `PREFIX_NAME=AUTOUPDATE`.  Typical use-case being to allow access to an EC2 instance or Load Balancer from CloudFront only.  The SGs are replaced whenever the function is invoked, i.e., when triggered by AWS updating IP addresses spaces or when manually invoked (see **Test Event** below).  See **This Solution** below for more details.
+A Lambda function to create EC2 Security Groups (SGs) in multiple regions with ingress rules for IP address ranges of an AWS service and attach them to ENIs tagged with `PREFIX_NAME=AUTOUPDATE`.  Typical use-case being to allow access to an EC2 instance or Load Balancer from CloudFront only.  The SGs are replaced whenever the function is invoked, i.e., when triggered by AWS updating IP addresses spaces or when manually invoked (see [**Test Event**[(#test-event) below).  See [**This Solution**](#this-solution) below for more details.
 
 ## Deployment
 
@@ -7,7 +7,7 @@ This project uses [AWS SAM](https://docs.aws.amazon.com/serverless-application-m
 
 This lambda function subscribes to the [AmazonIpSpaceChanged](http://docs.aws.amazon.com/general/latest/gr/aws-ip-ranges.html#subscribe-notifications) SNS topic.  As this topic is in us-east-1 region the subscription (and therefore this function) **must be deployed to the us-east-1 region** also.
 
-**Top Tip:** Create a `samconfig.toml` file in the project root to specify use-case specific settings and overrides (example below).  This is required at least to provide parameter overrides to the stack for `NotificationEmail`, `IngressPorts`, and `RegionList`.  See **Configuration** section for full list of parameters that can be overridden.  After making changes run `sam deploy` to action the changes.
+**Top Tip:** Create a `samconfig.toml` file in the project root to specify use-case specific settings and overrides (example below).  This is required at least to provide parameter overrides to the stack for `NotificationEmail`, `IngressPorts`, and `RegionList`.  See [**Configuration**](#configuration) section for full list of parameters that can be overridden.  After making changes run `sam deploy` to action the changes.
 
 ```toml
 version = 0.1
