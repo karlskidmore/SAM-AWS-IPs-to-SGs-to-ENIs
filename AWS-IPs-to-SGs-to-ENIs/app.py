@@ -72,7 +72,7 @@ def lambda_handler(event, context):
         
         # Derive number of SGs required to hold all rules in this region
         total_sgs_rqd = math.ceil(total_rules / max_rules_per_sg)
-        logging.info(f'{total_sgs_rqd} new SGs are needed to host {total_rules} rules at max {max_rules_per_sg} rules per SG, i.e. {ranges} cidr ranges x {ports} port ranges {*INGRESS_PORTS,}')
+        logging.info(f'{total_sgs_rqd} SGs are needed to host {total_rules} rules at max {max_rules_per_sg} rules per SG, i.e. {ranges} cidr ranges x {ports} port ranges {*INGRESS_PORTS,}')
 
         # Create ec2 boto3 client 
         ec2_client = boto3.client('ec2', region_name=region)
