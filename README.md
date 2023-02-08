@@ -74,6 +74,8 @@ A [more recent approach](https://aws.amazon.com/blogs/security/automatically-upd
 
 In summary, while these approaches worked well within fixed scenarios, they have a short shelf-life and need to be tweaked whenever user changes are needed or the inevitable happens (an outage).
 
+UPDATE: No need to use this or the above solutions since AWS introduced managed prefix for Cloudfront.  See: https://aws.amazon.com/about-aws/whats-new/2022/02/amazon-cloudfront-managed-prefix-list/
+
 ## This Solution
 
 This solution borrows ideas from the above methods to an extent but simplifies by borrowing ideas from throw-away immutable container deployment practices: i.e. it does not attempt to mutate a fixed set of SGs in-place, instead it creates new SGs according to the latest information available *at invocation time*, (i.e. How many *Service* IP ranges, *right-now*?  How many ports, *right-now*?  What are the region-specific limits, *right-now*?).   Like containers, old SGs are destroyed as soon as the new SGs take their place on ENIs.  Any separate SGs for perpetual rules (for SSH, VPNs, etc) already attached to ENIs survive these SG replacements -- in one atomic operation.
